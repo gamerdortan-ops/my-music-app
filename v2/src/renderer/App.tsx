@@ -12,15 +12,17 @@ export const App: React.FC = () => {
     currentTrack,
     currentTime,
     duration,
+    volume,
     playTrack,
     togglePlay,
     seek,
+    changeVolume,
     changeOutputDevice,
     getByteFrequencyData
   } = useAudio();
 
   const [activeDeviceId, setActiveDeviceId] = useState<string | null>('default');
-  const [tracks, setTracks] = useState<any[]>([]); // 👈 FIXED: Typed as array fallback structure []
+  const [tracks, setTracks] = useState<any[]>([]); // Initialized as proper array structure
   const [currentFolder, setCurrentFolder] = useState<string | null>(null);
 
   // Sync rows from SQLite database
@@ -30,7 +32,7 @@ export const App: React.FC = () => {
         const data = await window.electronAPI.getSongs();
         const folder = await window.electronAPI.getSelectedFolder();
         
-        setTracks(Array.isArray(data) ? data : []); // 👈 FIXED: Proper fallback brackets
+        setTracks(Array.isArray(data) ? data : []); 
         setCurrentFolder(folder);
       } catch (err) {
         console.error("Failed to sync library contents:", err);
@@ -50,7 +52,7 @@ export const App: React.FC = () => {
     return () => {
       window.electronAPI?.removeLibraryListener();
     };
-  }, []); // 👈 FIXED: Added execution brackets
+  }, []); 
 
   const handleDeviceChange = async (deviceId: string) => {
     setActiveDeviceId(deviceId);
@@ -63,6 +65,35 @@ export const App: React.FC = () => {
       if (selected) {
         await fetchSongsFromDB(); 
       }
+    }
+  };
+
+  // ──> NEW: SKIP NEXT CALCULATION LAYER
+  const handleNextTrack = () => {
+    if (tracks.length === 0) return;
+    
+    // Find where the active song sits in the library order array
+    const currentIndex = tracks.findIndex(t => t.file_path === currentTrack);
+    
+    // If no song is loaded or it's the absolute last item, loop back around to index 0
+    if (currentIndex === -1 || currentIndex === tracks.length - 1) {
+      playTrack(tracks[0].file_path);
+    } else {
+      playTrack(tracks[currentIndex + 1].file_path);
+    }
+  };
+
+  // ──> NEW: SKIP PREVIOUS CALCULATION LAYER
+  const handlePrevTrack = () => {
+    if (tracks.length === 0) return;
+    
+    const currentIndex = tracks.findIndex(t => t.file_path === currentTrack);
+    
+    // If no song is loaded or it's the very first item, warp back to the tail end track item
+    if (currentIndex === -1 || currentIndex === 0) {
+      playTrack(tracks[tracks.length - 1].file_path);
+    } else {
+      playTrack(tracks[currentIndex - 1].file_path);
     }
   };
 
@@ -106,6 +137,10 @@ export const App: React.FC = () => {
         currentTime={currentTime}
         duration={duration}
         onSeek={seek}
+        volume={volume}
+        onVolumeChange={changeVolume}
+        onNext={handleNextTrack} // 👈 PASSED THE NEXT TRACK HANDLER
+        onPrev={handlePrevTrack} // 👈 PASSED THE PREV TRACK HANDLER
         trackTitle={activeTrackDetails ? activeTrackDetails.title : "No Track Selected"}
         trackArtist={activeTrackDetails ? activeTrackDetails.artist : "Unknown Artist"}
       />
