@@ -1,0 +1,37 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Dependency directories (Stops thousands of heavy files from cluttering your commit)
+**/node_modules/
+v1/node_modules/
+
+# Local databases
+v1/src/main/*.db
+v1/src/main/*.sqlite
+*.db
+*.sqlite
+
+# Production build distributions (Compiled output folders)
+**/dist/
+v1/dist/
+
+# IDE files and workspace configuration files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS metadata junk files
+Thumbs.db
+EHthumbs.db
+Desktop.ini
+.DS_Store
+
+What Everything Does.docx
