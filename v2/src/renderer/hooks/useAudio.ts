@@ -5,10 +5,8 @@ export const useAudio = () => {
   const [currentTrack, setCurrentTrack] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
-  
-  // ──> 1. ADD THIS VOLUME TRACKING STATE VARIABLE (0 to 1 range for HTML5)
-  const [volume, setVolumeState] = useState<number>(0.8);
-  
+  const [volume, setVolume] = useState<number>(80); // percent 0–100
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -18,37 +16,36 @@ export const useAudio = () => {
     const audio = new Audio();
     audio.crossOrigin = "anonymous";
     audio.preload = "auto";
-    // ──> 2. INITIALIZE AUDIO VOLUME TO MATCH THE INITIAL STATE
-    audio.volume = 0.8; 
     audioRef.current = audio;
 
     audio.style.display = 'none';
     document.body.appendChild(audio);
 
     const handleTimeUpdate = () => {
-      if (audio.currentTime !== undefined) {
-        setCurrentTime(audio.currentTime);
-      }
+      console.log("⏱ timeupdate:", audio.currentTime);
+      setCurrentTime(audio.currentTime);
     };
 
-    const handleDurationChange = () => {
-      if (audio.duration && !isNaN(audio.duration)) {
+    const handleMetadata = () => {
+      console.log("📀 loadedmetadata, duration:", audio.duration);
+      if (!isNaN(audio.duration)) {
         setDuration(audio.duration);
       }
     };
 
     const handleEnded = () => {
+      console.log("🔚 ended");
       setIsPlaying(false);
       setCurrentTime(0);
     };
 
     audio.addEventListener('timeupdate', handleTimeUpdate);
-    audio.addEventListener('durationchange', handleDurationChange);
+    audio.addEventListener('loadedmetadata', handleMetadata);
     audio.addEventListener('ended', handleEnded);
 
     return () => {
       audio.removeEventListener('timeupdate', handleTimeUpdate);
-      audio.removeEventListener('durationchange', handleDurationChange);
+      audio.removeEventListener('loadedmetadata', handleMetadata);
       audio.removeEventListener('ended', handleEnded);
       audio.pause();
       if (document.body.contains(audio)) {
@@ -62,8 +59,9 @@ export const useAudio = () => {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       const ctx = new AudioContextClass();
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256; 
-      
+
+      analyser.fftSize = 256;
+
       const source = ctx.createMediaElementSource(audioRef.current);
       source.connect(analyser);
       analyser.connect(ctx.destination);
@@ -79,6 +77,7 @@ export const useAudio = () => {
 
     try {
       initAudioEngine();
+
       if (audioContextRef.current?.state === 'suspended') {
         await audioContextRef.current.resume();
       }
@@ -87,55 +86,81 @@ export const useAudio = () => {
       if (cleanPath.startsWith('/')) {
         cleanPath = cleanPath.slice(1);
       }
-      
+
       setCurrentTime(0);
       setDuration(0);
-      
+
       audioRef.current.src = `atom://${cleanPath}`;
-      // Maintain the current slider volume setting when a brand new track loads
-      audioRef.current.volume = volume;
+      console.log("▶️ setting src:", audioRef.current.src);
+      audioRef.current.load(); // force metadata load
       setCurrentTrack(filePath);
-      
+
+      // apply current volume
+      audioRef.current.volume = volume / 100;
+
       await audioRef.current.play();
+      console.log("🎶 playback started");
       setIsPlaying(true);
     } catch (error) {
-      console.error("Playback failed inside useAudio system hook:", error);
+      console.error("Playback failed inside useAudio:", error);
     }
   };
 
   const togglePlay = () => {
     if (!audioRef.current || !currentTrack) return;
+
     if (isPlaying) {
       audioRef.current.pause();
+      console.log("⏸ paused");
       setIsPlaying(false);
     } else {
-      audioRef.current.play().catch(console.error);
+      audioRef.current.play().then(() => {
+        console.log("▶️ resumed");
+      }).catch(console.error);
       setIsPlaying(true);
     }
   };
 
   const seek = (timeInSeconds: number) => {
     if (!audioRef.current || !currentTrack || isNaN(timeInSeconds)) return;
+    console.log("⏩ seeking to:", timeInSeconds);
     audioRef.current.currentTime = timeInSeconds;
     setCurrentTime(timeInSeconds);
   };
 
-  // ──> 3. ADD THIS DYNAMIC VOLUME ADJUSTMENT FUNCTION
-  const changeVolume = (value: number) => {
-    const normalizedVolume = Math.max(0, Math.min(1, value));
-    setVolumeState(normalizedVolume);
-    if (audioRef.current) {
-      audioRef.current.volume = normalizedVolume;
-    }
+  const changeVolume = (newVolume: number) => {
+    if (!audioRef.current) return;
+    const normalized = Math.max(0, Math.min(1, newVolume / 100));
+    audioRef.current.volume = normalized;
+    setVolume(newVolume);
+    console.log("🔊 volume set:", newVolume, "%");
   };
 
   const changeOutputDevice = async (deviceId: string) => {
-    if (audioRef.current && 'setSinkId' in audioRef.current) {
-      try {
-        await (audioRef.current as any).setSinkId(deviceId);
-        console.log(`Audio output routed successfully to device: ${deviceId}`);
-      } catch (err) {
-        console.error("Failed to switch audio output hardware target:", err);
+    if (!audioRef.current) {
+      console.warn("⚠️ No audio element available");
+      return;
+    }
+
+    if (!('setSinkId' in audioRef.current)) {
+      console.warn("⚠️ setSinkId not supported in this environment");
+      return;
+    }
+
+    try {
+      console.log("🔄 Attempting to switch audio output to:", deviceId);
+
+      if (audioRef.current.src && audioRef.current.paused) {
+        console.log("   Audio paused, resuming before swap...");
+        await audioRef.current.play();
+      }
+
+      await (audioRef.current as any).setSinkId(deviceId);
+      console.log(`✅ Audio output routed successfully to device: ${deviceId}`);
+    } catch (err: any) {
+      console.error("❌ Failed to swap audio hardware output target:", err.name, err.message);
+      if (err.name === "AbortError") {
+        console.error("👉 AbortError usually means the OS/driver rejected this deviceId.");
       }
     }
   };
@@ -148,7 +173,6 @@ export const useAudio = () => {
     return dataArray;
   };
 
-  // ──> 4. EXPORT VOLUME AND CHANGEVOLUME TO THE APP LAYER
   return {
     isPlaying,
     currentTrack,

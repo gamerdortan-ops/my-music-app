@@ -1,6 +1,6 @@
 import * as React from 'react';
-import { useEffect, useState } from 'react';
 import { Volume2, Headphones, Speaker, Disc, RefreshCw, FolderOpen } from 'lucide-react';
+import { useDevices } from '../hooks/useDevices'; // 👈 IMPORT THE CLEAN NEW HOOK
 
 interface SidebarProps {
   activeDeviceId: string | null;
@@ -15,29 +15,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   currentFolder, 
   onFolderSelect 
 }) => {
-  const [devices, setDevices] = useState<any[]>([]);
-
-  const scanAudioDevices = async () => {
-    try {
-      await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => {});
-      const allDevices = await navigator.mediaDevices.enumerateDevices();
-      const outputDevices = allDevices
-        .filter(device => device.kind === 'audiooutput' && device.deviceId !== '')
-        .map(device => ({
-          id: device.deviceId,
-          label: device.label || `Audio Target (${device.deviceId.slice(0, 4)})`
-        }));
-      setDevices(outputDevices);
-    } catch (error) {
-      console.error('Hardware discovery block error:', error);
-    }
-  };
-
-  useEffect(() => {
-    scanAudioDevices();
-    navigator.mediaDevices.addEventListener('devicechange', scanAudioDevices);
-    return () => navigator.mediaDevices.removeEventListener('devicechange', scanAudioDevices);
-  }, []);
+  // ──> CONSUME SYSTEM DISCOVERED AUDIO TRACK HARDWARE DEEP LINKS HERE
+  const { devices, refreshDevices } = useDevices();
 
   return (
     <aside className="w-64 h-full bg-zinc-900 border-r border-zinc-800 flex flex-col text-zinc-200">
@@ -62,7 +41,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
 
-        {/* FIXED: Dynamic Indicator prints active folder label cleanly */}
         {currentFolder && (
           <div className="px-3 py-2 bg-zinc-950/40 border border-zinc-800/80 rounded-lg mx-1">
             <div className="flex items-center gap-2 text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-1">
@@ -83,7 +61,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <Volume2 className="w-4 h-4 text-purple-400" />
             <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Audio Output</span>
           </div>
-          <button onClick={scanAudioDevices} className="text-zinc-500 hover:text-white transition-colors">
+          <button onClick={refreshDevices} className="text-zinc-500 hover:text-white transition-colors">
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -91,7 +69,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="space-y-1 max-h-48 overflow-y-auto custom-scrollbar">
           {devices.map((device) => {
             const isActive = device.id === activeDeviceId || (activeDeviceId === 'default' && device.id === 'default');
-            const isHeadphones = device.label.toLowerCase().includes('headphone') || device.label.toLowerCase().includes('buds');
+            const isHeadphones = device.label.toLowerCase().includes('headphone') || device.label.toLowerCase().includes('buds') || device.label.toLowerCase().includes('audio');
 
             return (
               <button
