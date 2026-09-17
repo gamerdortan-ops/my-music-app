@@ -1,19 +1,55 @@
 import { app, BrowserWindow, ipcMain, dialog, protocol } from 'electron';
 import * as path from 'path';
-import { initDatabase, getAllSongs } from './database';
+import * as fs from 'fs'; // 👈 ADDED NATIVE FS IMPORT
+import { initDatabase, getAllSongs, clearDatabase} from './database';
 import { startWatchingFolder } from './watcher';
+// Look for your database imports near the top of index.ts and update it to this:
+
 
 let mainWindow: BrowserWindow | null = null;
-let savedMusicFolder: string | null = null; // Caches chosen directory path string
+let savedMusicFolder: string | null = null; 
 
-// Register custom file protocol securely with privileges enabled
+// ──> NEW: CONSTANT FILE PATH FOR STORAGE PERSISTENCE
+const getConfigFileAddress = () => {
+  const userDataPath = app.getPath('userData');
+  return path.join(userDataPath, 'glow_config.json');
+};
+
+// ──> NEW: LIFECYCLE METHOD TO LOAD PATH ON BOOT
+const loadSavedFolderConfig = () => {
+  const configPath = getConfigFileAddress();
+  if (fs.existsSync(configPath)) {
+    try {
+      const rawData = fs.readFileSync(configPath, 'utf-8');
+      const parsed = JSON.parse(rawData);
+      if (parsed && parsed.lastOpenedFolder) {
+        savedMusicFolder = parsed.lastOpenedFolder;
+        console.log(`Auto-restored last opened directory: ${savedMusicFolder}`);
+      }
+    } catch (e) {
+      console.error("Failed to read persistent folder configurations:", e);
+    }
+  }
+};
+
+// ──> NEW: LIFECYCLE METHOD TO SAVE PATH CHANGES
+const saveFolderConfig = (folderPath: string) => {
+  try {
+    const configPath = getConfigFileAddress();
+    const configData = { lastOpenedFolder: folderPath };
+    fs.writeFileSync(configPath, JSON.stringify(configData, null, 2), 'utf-8');
+  } catch (e) {
+    console.error("Failed to write persistent configurations:", e);
+  }
+};
+
 protocol.registerSchemesAsPrivileged([
   { scheme: 'atom', privileges: { bypassCSP: true, stream: true, corsEnabled: true, supportFetchAPI: true } }
 ]);
 
 const createWindow = (): void => {
   mainWindow = new BrowserWindow({
-    width: 1300, // Slightly expanded grid workspace
+    width: 1300, 
     height: 850,
     backgroundColor: '#09090b',
     titleBarStyle: 'default',
@@ -21,7 +57,7 @@ const createWindow = (): void => {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      webSecurity: true // Keeps browser layer safe while protocols pass music binaries
+      webSecurity: true 
     }
   });
 
@@ -32,25 +68,28 @@ const createWindow = (): void => {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 
+  // ──> NEW: ONCE THE RECT INTERFACE SENDS A READY ACKNOWLEDGEMENT, START WATCHER IMMEDIATELY
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (savedMusicFolder && mainWindow) {
+      startWatchingFolder(savedMusicFolder, mainWindow);
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 };
 
 app.whenReady().then(() => {
-  // FIXED: Bulletproof path encoder that accurately maintains Windows drive formatting (C:/)
   protocol.registerFileProtocol('atom', (request, callback) => {
-    // 1. Extract the raw path string out of the browser URL structure
     let targetUrl = request.url.replace(/^atom:\/\//, '');
     let decodedPath = decodeURIComponent(targetUrl);
     
-    // 2. CRITICAL WINDOWS FIX: If the path looks like "C/Users...", transform it into "C:/Users..."
     if (/^[A-Za-z]\//.test(decodedPath)) {
       decodedPath = decodedPath.charAt(0) + ':/' + decodedPath.slice(2);
     }
     
     try {
-      // 3. Clean up mixed slash directions completely
       const cleanFileSystemPath = path.normalize(decodedPath);
       return callback({ path: cleanFileSystemPath });
     } catch (error) {
@@ -58,22 +97,20 @@ app.whenReady().then(() => {
     }
   });
 
+  // ──> EXECUTE AUTO-RESTORE READ PASS BEFORE WINDOW STARTS
+  loadSavedFolderConfig();
   initDatabase();
   createWindow();
 });
-
-
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// IPC Channel Handlers
 ipcMain.handle('db:get-songs', async () => {
   return getAllSongs();
 });
 
-// FIXED: Channel handler now accurately passes back tracked storage configuration labels
 ipcMain.handle('fs:get-selected-folder', async () => {
   return savedMusicFolder;
 });
@@ -89,12 +126,21 @@ ipcMain.handle('fs:select-folder', async () => {
     return null;
   }
 
-  // Isolate and normalize path formatting
   const selectedPath = result.filePaths[0].replace(/\\/g, '/');
   savedMusicFolder = selectedPath;
 
-  // Boot up background scanner
-  startWatchingFolder(selectedPath, mainWindow);
+  // 1. SAVE THE NEW CONFIG POSITION TO FILE
+  saveFolderConfig(selectedPath);
 
+  // ──> 2. ADD THIS NEW PASS HERE TO PURGE THE OLD SONG LIST FROM MEMORY FIRST
+  clearDatabase();
+
+  // 3. START BACKGROUND SYNC AND SCAN OF THE REFRESHED CHANNELS
+  startWatchingFolder(selectedPath, mainWindow);
+  
+  // 4. Force frontend tracking layout update
+  mainWindow.webContents.send('library-updated');
+  
   return selectedPath;
 });
+

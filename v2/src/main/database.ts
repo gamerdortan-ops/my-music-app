@@ -41,8 +41,12 @@ export const initDatabase = (): void => {
 /**
  * Retrieves all songs cached inside the local database.
  */
+// Replace your current getAllSongs() block inside database.ts with this layout:
 export const getAllSongs = (): Track[] => {
   try {
+    // If database connection is active but no directory is loaded yet, return empty list!
+    if (!db) return [];
+    
     const stmt = db.prepare('SELECT * FROM songs ORDER BY title ASC');
     return stmt.all() as Track[];
   } catch (error) {
@@ -50,6 +54,7 @@ export const getAllSongs = (): Track[] => {
     return [];
   }
 };
+
 
 /**
  * Caches a new song metadata record into the database.
@@ -77,5 +82,20 @@ export const deleteSongByPath = (filePath: string): void => {
     stmt.run(filePath);
   } catch (error) {
     console.error(`Failed to delete song at path (${filePath}):`, error);
+  }
+};
+
+/**
+ * Completely purges the local songs table.
+ * Triggers when a user switches to a brand new folder directory space.
+ */
+export const clearDatabase = (): void => {
+  try {
+    if (!db) return;
+    const stmt = db.prepare('DELETE FROM songs');
+    stmt.run();
+    console.log('Local music tracking database table successfully purged.');
+  } catch (error) {
+    console.error('Failed to clear local cached song table:', error);
   }
 };
