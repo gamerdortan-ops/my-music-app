@@ -15,239 +15,976 @@ interface Particle {
   speed: number;
   size: number;
   alpha: number;
-  color: string;
+  hue: number;
 }
 
-export const Visualizer: React.FC<VisualizerProps> = ({ isPlaying, getByteFrequencyData, tracks = [] }) => {
+export const Visualizer: React.FC<VisualizerProps> = ({
+  isPlaying,
+  getByteFrequencyData,
+  tracks = [],
+}) => {
   const { bass, currentTrack } = useAudio();
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
-  
-  const rotationAngleRef = useRef<number>(0);
-  const particlesRef = useRef<Particle[]>([]);
-  const [albumArtImage, setAlbumArtImage] = useState<HTMLImageElement | null>(null);
 
-  // Persistent array to cache smoothed height tracking rows
-  const smoothedHeightsRef = useRef<number[]>(new Array(120).fill(0));
+  const rotationRef = useRef(0);
+  const pulseRef = useRef(0);
+  const particlesRef = useRef<Particle[]>([]);
+
+  const [albumArtImage, setAlbumArtImage] =
+    useState<HTMLImageElement | null>(null);
+
+  const [ambientGlowColor, setAmbientGlowColor] =
+    useState<string>('rgba(139, 92, 246, 0.18)');
+
+  /*
+   * ------------------------------------------------------------
+   * ALBUM ART
+   * ------------------------------------------------------------
+   */
 
   useEffect(() => {
     if (!currentTrack || !tracks.length) {
       setAlbumArtImage(null);
+      setAmbientGlowColor('rgba(139, 92, 246, 0.18)');
       return;
     }
-    const currentActiveSong = tracks.find((t: any) => (t.file_path || t.path) === currentTrack);
+
+    const currentActiveSong = tracks.find(
+      (t: any) => (t.file_path || t.path) === currentTrack
+    );
+
     if (currentActiveSong?.thumbnail || currentActiveSong?.album_art) {
       const img = new Image();
-      img.src = currentActiveSong.thumbnail || currentActiveSong.album_art;
-      img.onload = () => setAlbumArtImage(img);
-      img.onerror = () => setAlbumArtImage(null);
+
+      img.crossOrigin = 'anonymous';
+      img.src =
+        currentActiveSong.thumbnail ||
+        currentActiveSong.album_art;
+
+      img.onload = () => {
+        setAlbumArtImage(img);
+
+        try {
+          const sampleCanvas = document.createElement('canvas');
+          const sampleCtx = sampleCanvas.getContext('2d');
+
+          if (sampleCtx) {
+            sampleCanvas.width = 10;
+            sampleCanvas.height = 10;
+
+            sampleCtx.drawImage(img, 0, 0, 10, 10);
+
+            const pixelData = sampleCtx
+              .getImageData(5, 5, 1, 1)
+              .data;
+
+            setAmbientGlowColor(
+              `rgba(${pixelData[0]}, ${pixelData[1]}, ${pixelData[2]}, 0.20)`
+            );
+          }
+        } catch {
+          setAmbientGlowColor(
+            'rgba(139, 92, 246, 0.18)'
+          );
+        }
+      };
+
+      img.onerror = () => {
+        setAlbumArtImage(null);
+      };
     } else {
       setAlbumArtImage(null);
+      setAmbientGlowColor(
+        'rgba(139, 92, 246, 0.18)'
+      );
     }
   }, [currentTrack, tracks]);
 
+  /*
+   * ------------------------------------------------------------
+   * VISUALIZER
+   * ------------------------------------------------------------
+   */
+
   useEffect(() => {
     const canvas = canvasRef.current;
+
     if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
+
     if (!ctx) return;
 
-    canvas.width = 550;
-    canvas.height = 550;
+    const SIZE = 500;
 
-    const renderVisualizerEngine = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    canvas.width = SIZE;
+    canvas.height = SIZE;
 
-      const centerX = canvas.width / 2;
-      const centerY = canvas.height / 2;
-      
-      const eqMultiplier = Math.max(0.5, 1 + (bass / 12));
-      let baseRadius = 95 * eqMultiplier;
+    const centerX = SIZE / 2;
+    const centerY = SIZE / 2;
+
+    /*
+     * Smooth helper
+     */
+    const lerp = (
+      current: number,
+      target: number,
+      amount: number
+    ) => {
+      return current + (target - current) * amount;
+    };
+
+    /*
+     * Rounded line helper
+     */
+    const drawRoundedLine = (
+      x1: number,
+      y1: number,
+      x2: number,
+      y2: number,
+      width: number,
+      color: string
+    ) => {
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+
+      ctx.lineWidth = width;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = color;
+
+      ctx.stroke();
+    };
+
+    /*
+     * ----------------------------------------------------------
+     * MAIN RENDER LOOP
+     * ----------------------------------------------------------
+     */
+
+    const render = () => {
+      ctx.clearRect(0, 0, SIZE, SIZE);
 
       let frequencyData = getByteFrequencyData();
-      
+
+      /*
+       * Idle animation
+       */
       if (!frequencyData || !isPlaying) {
-        frequencyData = new Uint8Array(128);
+        frequencyData = new Uint8Array(96);
+
+        const time = Date.now() * 0.0015;
+
         for (let i = 0; i < frequencyData.length; i++) {
-          frequencyData[i] = Math.sin(Date.now() * 0.003 + i * 0.15) * 6 + 6;
+          frequencyData[i] =
+            14 +
+            Math.sin(time + i * 0.25) * 7;
         }
       }
 
-      // ──> HIGH-VELOCITY BASS CALCULATION PIPELINE
-      // Targets the absolute lowest sub-bass frequency bars (slots 0 to 3)
+      /*
+       * --------------------------------------------------------
+       * AUDIO ANALYSIS
+       * --------------------------------------------------------
+       */
+
       let bassSum = 0;
-      const bassBins = Math.min(4, frequencyData.length);
+
+      const bassBins = Math.min(
+        6,
+        frequencyData.length
+      );
+
       for (let i = 0; i < bassBins; i++) {
         bassSum += frequencyData[i];
       }
-      const bassIntensity = (bassSum / bassBins) / 255;
-      
-      // 💥 EXAGGERATED CORE BULGE: Amplified multiplier makes the whole center jump violently
-      const currentBulge = Math.pow(bassIntensity, 1.5) * 55 * eqMultiplier;
-      baseRadius += currentBulge;
 
-      // Spawning exploding spark fields matching bass punch speeds
+      const bassIntensity =
+        (bassSum / bassBins) / 255;
+
+      const totalBass =
+        Math.pow(bassIntensity, 1.35);
+
+      /*
+       * Smooth bass pulse
+       */
+      pulseRef.current = lerp(
+        pulseRef.current,
+        totalBass,
+        0.16
+      );
+
+      const pulse = pulseRef.current;
+
+      /*
+       * Rotation
+       */
+      rotationRef.current +=
+        isPlaying
+          ? 0.0018 + bassIntensity * 0.009
+          : 0.0005;
+
+      /*
+       * --------------------------------------------------------
+       * AMBIENT GLOW
+       * --------------------------------------------------------
+       */
+
+      const glowRadius =
+        175 + pulse * 75;
+
+      const ambientGradient =
+        ctx.createRadialGradient(
+          centerX,
+          centerY,
+          20,
+          centerX,
+          centerY,
+          glowRadius
+        );
+
+      ambientGradient.addColorStop(
+        0,
+        'rgba(168, 85, 247, 0.18)'
+      );
+
+      ambientGradient.addColorStop(
+        0.45,
+        'rgba(6, 182, 212, 0.07)'
+      );
+
+      ambientGradient.addColorStop(
+        1,
+        'rgba(0, 0, 0, 0)'
+      );
+
+      ctx.fillStyle = ambientGradient;
+
+      ctx.beginPath();
+      ctx.arc(
+        centerX,
+        centerY,
+        glowRadius,
+        0,
+        Math.PI * 2
+      );
+
+      ctx.fill();
+
+      /*
+       * --------------------------------------------------------
+       * ROTATING OUTER ORBITS
+       * --------------------------------------------------------
+       */
+
+      ctx.save();
+
+      ctx.translate(centerX, centerY);
+      ctx.rotate(rotationRef.current);
+
+      const orbitRadii = [
+        176,
+        184,
+        192,
+      ];
+
+      orbitRadii.forEach((radius, index) => {
+        ctx.beginPath();
+
+        ctx.arc(
+          0,
+          0,
+          radius + pulse * (index * 5),
+          0,
+          Math.PI * 2
+        );
+
+        ctx.strokeStyle =
+          index === 0
+            ? 'rgba(139, 92, 246, 0.20)'
+            : index === 1
+            ? 'rgba(6, 182, 212, 0.12)'
+            : 'rgba(217, 70, 239, 0.08)';
+
+        ctx.lineWidth =
+          index === 0 ? 1.5 : 1;
+
+        ctx.stroke();
+      });
+
+      ctx.restore();
+
+      /*
+       * --------------------------------------------------------
+       * AUDIO HALO
+       * --------------------------------------------------------
+       *
+       * 72 bars around the complete circle.
+       */
+
+      const bars = 72;
+
+      const innerRadius =
+        138 + pulse * 12;
+
+      const maxBarLength =
+        55 + pulse * 45;
+
+      for (let i = 0; i < bars; i++) {
+        /*
+         * Use mirrored frequency data so the
+         * visualizer feels symmetrical.
+         */
+        const frequencyIndex =
+          Math.floor(
+            (i / bars) *
+              Math.min(64, frequencyData.length)
+          );
+
+        const raw =
+          frequencyData[frequencyIndex] || 0;
+
+        const normalized =
+          raw / 255;
+
+        /*
+         * Add subtle smoothing based on
+         * neighboring frequencies.
+         */
+        const next =
+          frequencyData[
+            Math.min(
+              frequencyIndex + 1,
+              frequencyData.length - 1
+            )
+          ] || 0;
+
+        const average =
+          (raw + next) / 2;
+
+        const level =
+          Math.pow(average / 255, 0.72);
+
+        const barLength =
+          5 + level * maxBarLength;
+
+        const angle =
+          (i / bars) *
+            Math.PI *
+            2 -
+          Math.PI / 2 +
+          rotationRef.current;
+
+        const startRadius =
+          innerRadius;
+
+        const endRadius =
+          innerRadius + barLength;
+
+        const x1 =
+          centerX +
+          Math.cos(angle) *
+            startRadius;
+
+        const y1 =
+          centerY +
+          Math.sin(angle) *
+            startRadius;
+
+        const x2 =
+          centerX +
+          Math.cos(angle) *
+            endRadius;
+
+        const y2 =
+          centerY +
+          Math.sin(angle) *
+            endRadius;
+
+        /*
+         * Cyan -> purple -> pink
+         */
+        const hue =
+          190 +
+          (i / bars) * 150;
+
+        /*
+         * Stronger bars get brighter
+         */
+        const alpha =
+          0.30 + level * 0.70;
+
+        const color =
+          `hsla(${hue}, 95%, ${62 + level * 18}%, ${alpha})`;
+
+        /*
+         * Glow only on stronger frequencies
+         */
+        if (level > 0.35) {
+          ctx.shadowBlur =
+            8 + level * 14;
+
+          ctx.shadowColor = color;
+        } else {
+          ctx.shadowBlur = 0;
+        }
+
+        drawRoundedLine(
+          x1,
+          y1,
+          x2,
+          y2,
+          3 + level * 2.5,
+          color
+        );
+      }
+
+      ctx.shadowBlur = 0;
+
+      /*
+       * --------------------------------------------------------
+       * PARTICLES
+       * --------------------------------------------------------
+       */
+
       if (isPlaying) {
-        rotationAngleRef.current += 0.004 + (bassIntensity * 0.025);
-        const particlesToSpawn = bassIntensity > 0.3 ? Math.floor(bassIntensity * 6) : 1;
-        for (let p = 0; p < particlesToSpawn; p++) {
-          if (particlesRef.current.length < 160) {
-            const randomAngle = Math.random() * Math.PI * 2;
+        const spawnCount =
+          bassIntensity > 0.42 ? 3 : 1;
+
+        for (
+          let i = 0;
+          i < spawnCount;
+          i++
+        ) {
+          if (
+            particlesRef.current.length <
+            90
+          ) {
+            const angle =
+              Math.random() *
+              Math.PI *
+              2;
+
             particlesRef.current.push({
-              x: centerX + Math.cos(randomAngle) * baseRadius,
-              y: centerY + Math.sin(randomAngle) * baseRadius,
-              angle: randomAngle,
-              // Particles fire outward much faster on heavy drum beats
-              speed: 1.5 + Math.random() * 2 + (Math.pow(bassIntensity, 2) * 12),
-              size: 1 + Math.random() * 3,
-              alpha: 1,
-              color: Math.random() > 0.5 ? '#06b6d4' : '#d946ef'
+              x:
+                centerX +
+                Math.cos(angle) *
+                  (innerRadius + 25),
+
+              y:
+                centerY +
+                Math.sin(angle) *
+                  (innerRadius + 25),
+
+              angle,
+
+              speed:
+                0.5 +
+                Math.random() * 1.8 +
+                bassIntensity * 4,
+
+              size:
+                0.8 +
+                Math.random() * 2,
+
+              alpha: 0.8,
+
+              hue:
+                180 +
+                Math.random() * 160,
             });
           }
         }
       }
 
-      // Draw active sparks
-      ctx.save();
-      for (let i = particlesRef.current.length - 1; i >= 0; i--) {
-        const particle = particlesRef.current[i];
-        particle.x += Math.cos(particle.angle) * particle.speed;
-        particle.y += Math.sin(particle.angle) * particle.speed;
-        particle.alpha -= 0.018;
+      for (
+        let i =
+          particlesRef.current.length - 1;
+        i >= 0;
+        i--
+      ) {
+        const particle =
+          particlesRef.current[i];
 
-        if (particle.alpha <= 0) {
-          particlesRef.current.splice(i, 1);
+        particle.x +=
+          Math.cos(particle.angle) *
+          particle.speed;
+
+        particle.y +=
+          Math.sin(particle.angle) *
+          particle.speed;
+
+        particle.alpha -= 0.012;
+
+        if (
+          particle.alpha <= 0
+        ) {
+          particlesRef.current.splice(
+            i,
+            1
+          );
+
           continue;
         }
 
         ctx.beginPath();
-        ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${particle.color === '#06b6d4' ? '6, 182, 212' : '217, 70, 239'}, ${particle.alpha})`;
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = particle.color;
+
+        ctx.arc(
+          particle.x,
+          particle.y,
+          particle.size,
+          0,
+          Math.PI * 2
+        );
+
+        const particleColor =
+          `hsla(${particle.hue}, 95%, 65%, ${particle.alpha})`;
+
+        ctx.fillStyle =
+          particleColor;
+
+        ctx.shadowBlur = 8;
+        ctx.shadowColor =
+          particleColor;
+
         ctx.fill();
       }
-      ctx.restore();
 
-      // ──> SMOOTH YET EXPLOSIVE 180° MIRROR MATRIX
-            // ──> LAYER B: INVERTED SILKY 180° MIRROR MATRIX (Top to Bottom Flow)
-      const pointsCount = 65;
-      const rightHalfPoints: { x: number; y: number }[] = [];
-      const leftHalfPoints: { x: number; y: number }[] = [];
+      ctx.shadowBlur = 0;
 
-      for (let i = 0; i < pointsCount; i++) {
-        // 💥 CRITICAL ROTATION INVERSION: Changed starting baseline to -Math.PI / 2
-        // This anchors the base path at the absolute top center, forcing spikes to explode UPWARD!
-        const angle = -Math.PI / 2 + (i / (pointsCount - 1)) * Math.PI;
-        
-        const rawMagnitude = frequencyData[i] || 0;
-        const targetWaveHeight = Math.pow(rawMagnitude / 255, 1.5) * 130 * eqMultiplier;
+      /*
+       * --------------------------------------------------------
+       * ALBUM ART CORE
+       * --------------------------------------------------------
+       */
 
-        if (smoothedHeightsRef.current[i] === undefined) smoothedHeightsRef.current[i] = 0;
-        smoothedHeightsRef.current[i] = (smoothedHeightsRef.current[i] * 0.45) + (targetWaveHeight * 0.55);
-        
-        const smoothHeight = smoothedHeightsRef.current[i];
-        const currentRadius = baseRadius + smoothHeight;
+      const coreRadius =
+        112 +
+        pulse * 14;
 
-        // Trace the Right Half curve (Top Center -> Down to Bottom Center)
-        rightHalfPoints.push({
-          x: centerX + Math.cos(angle) * currentRadius,
-          y: centerY + Math.sin(angle) * currentRadius
-        });
+      /*
+       * Outer core glow
+       */
+      const coreGlow =
+        ctx.createRadialGradient(
+          centerX,
+          centerY,
+          coreRadius * 0.65,
+          centerX,
+          centerY,
+          coreRadius + 35
+        );
 
-        // Trace the Left Half curve (Mirrored perfectly on the opposite horizontal axis)
-        leftHalfPoints.push({
-          x: centerX - Math.cos(angle) * currentRadius,
-          y: centerY + Math.sin(angle) * currentRadius
-        });
-      }
+      coreGlow.addColorStop(
+        0,
+        'rgba(139, 92, 246, 0.10)'
+      );
 
-      const waveChain: { x: number; y: number }[] = [];
-      // Combine paths: Top to Bottom down the right edge...
-      for (let i = 0; i < pointsCount; i++) waveChain.push(rightHalfPoints[i]);
-      // ...then crawl back up from Bottom to Top along the left edge.
-      for (let i = pointsCount - 1; i >= 0; i--) waveChain.push(leftHalfPoints[i]);
-      waveChain.push(rightHalfPoints[0]);
+      coreGlow.addColorStop(
+        0.7,
+        'rgba(6, 182, 212, 0.04)'
+      );
 
+      coreGlow.addColorStop(
+        1,
+        'rgba(0, 0, 0, 0)'
+      );
 
-      // Draw Quadratic Bezier neon rope path
-      ctx.save();
-      ctx.shadowBlur = 30 + (bassIntensity * 55) * eqMultiplier;
-      ctx.shadowColor = 'rgba(217, 70, 239, 0.9)';
+      ctx.fillStyle = coreGlow;
 
       ctx.beginPath();
-      ctx.moveTo(waveChain[0].x, waveChain[0].y);
-      for (let i = 0; i < waveChain.length - 1; i++) {
-        const currentPoint = waveChain[i];
-        const nextPoint = waveChain[i + 1];
-        const midPointX = (currentPoint.x + nextPoint.x) / 2;
-        const midPointY = (currentPoint.y + nextPoint.y) / 2;
-        ctx.quadraticCurveTo(currentPoint.x, currentPoint.y, midPointX, midPointY);
-      }
-      ctx.closePath();
 
-      const gradient = ctx.createRadialGradient(centerX, centerY, baseRadius - 20, centerX, centerY, baseRadius + 110);
-      gradient.addColorStop(0, '#f43f5e'); 
-      gradient.addColorStop(0.4, '#d946ef'); 
-      gradient.addColorStop(1, '#06b6d4'); 
+      ctx.arc(
+        centerX,
+        centerY,
+        coreRadius + 35,
+        0,
+        Math.PI * 2
+      );
 
-      ctx.lineWidth = 5.5;
-      ctx.strokeStyle = gradient;
-      ctx.stroke();
-      ctx.restore();
+      ctx.fill();
 
-      // ──> LAYER D: CLIP INNER ALBUM IMAGE TARGET
+      /*
+       * Album art clipping circle
+       */
       ctx.save();
+
       ctx.beginPath();
-      ctx.arc(centerX, centerY, baseRadius - 3, 0, Math.PI * 2);
-      ctx.closePath();
-      ctx.clip(); 
+
+      ctx.arc(
+        centerX,
+        centerY,
+        coreRadius,
+        0,
+        Math.PI * 2
+      );
+
+      ctx.clip();
 
       if (albumArtImage) {
-        ctx.drawImage(albumArtImage, centerX - baseRadius, centerY - baseRadius, baseRadius * 2, baseRadius * 2);
+        /*
+         * Cover image
+         */
+        ctx.drawImage(
+          albumArtImage,
+          centerX - coreRadius,
+          centerY - coreRadius,
+          coreRadius * 2,
+          coreRadius * 2
+        );
+
+        /*
+         * Dark cinematic overlay
+         */
+        const imageOverlay =
+          ctx.createLinearGradient(
+            centerX - coreRadius,
+            centerY - coreRadius,
+            centerX + coreRadius,
+            centerY + coreRadius
+          );
+
+        imageOverlay.addColorStop(
+          0,
+          'rgba(0, 0, 0, 0.04)'
+        );
+
+        imageOverlay.addColorStop(
+          0.5,
+          'rgba(0, 0, 0, 0)'
+        );
+
+        imageOverlay.addColorStop(
+          1,
+          'rgba(0, 0, 0, 0.35)'
+        );
+
+        ctx.fillStyle =
+          imageOverlay;
+
+        ctx.fillRect(
+          centerX - coreRadius,
+          centerY - coreRadius,
+          coreRadius * 2,
+          coreRadius * 2
+        );
       } else {
-        ctx.fillStyle = '#09090b';
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, baseRadius - 3, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(168, 85, 247, 0.25)';
-        ctx.lineWidth = 3;
-        ctx.stroke();
+        /*
+         * No artwork
+         */
+        const emptyGradient =
+          ctx.createRadialGradient(
+            centerX,
+            centerY,
+            10,
+            centerX,
+            centerY,
+            coreRadius
+          );
+
+        emptyGradient.addColorStop(
+          0,
+          '#18121f'
+        );
+
+        emptyGradient.addColorStop(
+          0.6,
+          '#0b0b12'
+        );
+
+        emptyGradient.addColorStop(
+          1,
+          '#050507'
+        );
+
+        ctx.fillStyle =
+          emptyGradient;
+
+        ctx.fillRect(
+          centerX - coreRadius,
+          centerY - coreRadius,
+          coreRadius * 2,
+          coreRadius * 2
+        );
       }
+
       ctx.restore();
 
-      if (!albumArtImage) {
-        ctx.fillStyle = isPlaying ? '#a855f7' : '#52525b';
-        ctx.font = 'bold 10px monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.letterSpacing = '5px';
-        ctx.fillText(isPlaying ? 'AUDIO LIVE' : 'PAUSED', centerX + 2, centerY);
-      }
+      /*
+       * --------------------------------------------------------
+       * CORE RINGS
+       * --------------------------------------------------------
+       */
 
-      // Outer Gold Frame Accent Ring
+      /*
+       * Inner white highlight
+       */
       ctx.beginPath();
-      ctx.arc(centerX, centerY, baseRadius - 3, 0, Math.PI * 2);
-      ctx.strokeStyle = '#f59e0b'; 
-      ctx.lineWidth = 3.5;
+
+      ctx.arc(
+        centerX,
+        centerY,
+        coreRadius - 1,
+        0,
+        Math.PI * 2
+      );
+
+      ctx.strokeStyle =
+        'rgba(255, 255, 255, 0.14)';
+
+      ctx.lineWidth = 1;
+
       ctx.stroke();
 
-      animationRef.current = requestAnimationFrame(renderVisualizerEngine);
+      /*
+       * Neon outer ring
+       */
+      const ringGradient =
+        ctx.createLinearGradient(
+          centerX - coreRadius,
+          centerY - coreRadius,
+          centerX + coreRadius,
+          centerY + coreRadius
+        );
+
+      ringGradient.addColorStop(
+        0,
+        '#06b6d4'
+      );
+
+      ringGradient.addColorStop(
+        0.45,
+        '#8b5cf6'
+      );
+
+      ringGradient.addColorStop(
+        1,
+        '#ec4899'
+      );
+
+      ctx.beginPath();
+
+      ctx.arc(
+        centerX,
+        centerY,
+        coreRadius + 5 + pulse * 3,
+        0,
+        Math.PI * 2
+      );
+
+      ctx.strokeStyle =
+        ringGradient;
+
+      ctx.lineWidth =
+        2 + pulse * 2;
+
+      ctx.shadowBlur =
+        10 + pulse * 15;
+
+      ctx.shadowColor =
+        '#8b5cf6';
+
+      ctx.stroke();
+
+      ctx.shadowBlur = 0;
+
+      /*
+       * Small rotating accent arc
+       */
+      ctx.save();
+
+      ctx.translate(
+        centerX,
+        centerY
+      );
+
+      ctx.rotate(
+        rotationRef.current * 3
+      );
+
+      ctx.beginPath();
+
+      ctx.arc(
+        0,
+        0,
+        coreRadius + 10,
+        -0.6,
+        0.6
+      );
+
+      ctx.strokeStyle =
+        '#22d3ee';
+
+      ctx.lineWidth = 2;
+
+      ctx.shadowBlur = 12;
+
+      ctx.shadowColor =
+        '#22d3ee';
+
+      ctx.stroke();
+
+      ctx.restore();
+
+      ctx.shadowBlur = 0;
+
+      /*
+       * --------------------------------------------------------
+       * CENTER PULSE
+       * --------------------------------------------------------
+       */
+
+      if (isPlaying) {
+        const pulseRadius =
+          5 + pulse * 12;
+
+        const pulseGradient =
+          ctx.createRadialGradient(
+            centerX,
+            centerY,
+            0,
+            centerX,
+            centerY,
+            pulseRadius
+          );
+
+        pulseGradient.addColorStop(
+          0,
+          'rgba(255,255,255,0.85)'
+        );
+
+        pulseGradient.addColorStop(
+          0.3,
+          'rgba(34,211,238,0.55)'
+        );
+
+        pulseGradient.addColorStop(
+          1,
+          'rgba(139,92,246,0)'
+        );
+
+        ctx.fillStyle =
+          pulseGradient;
+
+        ctx.beginPath();
+
+        ctx.arc(
+          centerX,
+          centerY,
+          pulseRadius,
+          0,
+          Math.PI * 2
+        );
+
+        ctx.fill();
+      }
+
+      /*
+       * Continue animation
+       */
+      animationRef.current =
+        requestAnimationFrame(render);
     };
 
-    animationRef.current = requestAnimationFrame(renderVisualizerEngine);
+    animationRef.current =
+      requestAnimationFrame(render);
+
     return () => {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      if (animationRef.current) {
+        cancelAnimationFrame(
+          animationRef.current
+        );
+      }
     };
-  }, [isPlaying, getByteFrequencyData, bass, albumArtImage]);
+  }, [
+    isPlaying,
+    getByteFrequencyData,
+    bass,
+    albumArtImage,
+  ]);
+
+  /*
+   * ------------------------------------------------------------
+   * UI
+   * ------------------------------------------------------------
+   */
 
   return (
-    <div className="flex flex-col items-center justify-center relative w-full h-full min-h-[400px] box-border">
-      <canvas 
-        ref={canvasRef} 
-        className="w-[440px] h-[440px] drop-shadow-[0_0_60px_rgba(168,85,247,0.2)]"
+    <div className="relative flex h-full min-h-[360px] w-full items-center justify-center overflow-hidden">
+
+      {/* Ambient color bloom */}
+      <div
+        className="
+          pointer-events-none
+          absolute
+          h-[420px]
+          w-[420px]
+          rounded-full
+          blur-[110px]
+          opacity-40
+          transition-all
+          duration-1000
+          mix-blend-screen
+        "
+        style={{
+          backgroundColor:
+            ambientGlowColor,
+        }}
       />
+
+      {/* Secondary neon bloom */}
+      <div
+        className="
+          pointer-events-none
+          absolute
+          h-[260px]
+          w-[260px]
+          rounded-full
+          bg-purple-500/10
+          blur-[90px]
+          animate-pulse
+        "
+      />
+
+      {/* Main visualizer */}
+      <canvas
+        ref={canvasRef}
+        className="
+          relative
+          z-10
+          h-[390px]
+          w-[390px]
+          drop-shadow-[0_0_45px_rgba(139,92,246,0.16)]
+        "
+      />
+
+      {/* Top label */}
+      <div
+        className="
+          pointer-events-none
+          absolute
+          top-3
+          z-20
+          rounded-full
+          border
+          border-white/10
+          bg-black/30
+          px-4
+          py-1.5
+          text-[9px]
+          font-semibold
+          tracking-[0.28em]
+          text-white/45
+          backdrop-blur-xl
+        "
+      >
+        {isPlaying
+          ? 'NOW PLAYING'
+          : 'AUDIO CORE'}
+      </div>
+
     </div>
   );
 };

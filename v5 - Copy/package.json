@@ -1,0 +1,42 @@
+{
+  "name": "v1",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev:frontend": "vite",
+    "build:frontend": "tsc -p tsconfig.json && vite build",
+    "compile:backend": "tsc -p tsconfig.json",
+    "dev": "npm run compile:backend && electron .",
+    "build": "npm run build:frontend && npm run compile:backend"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "ffmpeg-static": "^5.3.0",
+    "fluent-ffmpeg": "^2.1.3",
+    "lucide-react": "^1.46.0",
+    "naudiodon": "^2.3.6",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "sound-play": "^1.1.0",
+    "tailwindcss": "^4.3.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/fluent-ffmpeg": "^2.1.28",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.1.1",
+    "better-sqlite3": "^13.0.3",
+    "chokidar": "^5.0.0",
+    "electron": "^44.4.1",
+    "electron-rebuild": "^3.2.9",
+    "music-metadata": "^11.15.0",
+    "typescript": "^7.0.2",
+    "vite": "^6.4.3"
+  }
+}
